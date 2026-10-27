@@ -1,0 +1,98 @@
+BALDI'S BASICS (C++ PORT) -- BUILDING THE iOS 6 APP IN XCODE
+==============================================================
+
+What this folder is
+-------------------
+  BaldiCpp.xcodeproj   the Xcode project (double-click it to open)
+  BaldiCpp/            the iPhone-specific code (window, touches, sound), Info.plist, icons
+  src/                 the game itself (C++), shared with the Windows build
+  content/data/        the game's data (textures, sounds, levels); copied into the app
+Target: iOS 6.0 or newer, iPhone / iPod touch / iPad, 32-bit (armv7, armv7s).
+Made for Xcode 4.5 - 5.1.1 (the versions that run on OS X 10.8 Mountain Lion).
+
+
+1. Get the folder into the Mac VM
+---------------------------------
+  - Copy BaldiCpp-iOS.zip into the VM (shared folder, USB stick, or drag-and-drop if your VM
+    software supports it). Put it somewhere simple, e.g. the Desktop.
+  - Double-click the zip. Finder unzips it into a folder named BaldiCpp-iOS.
+  - Keep the folder's contents together: the project finds src/, BaldiCpp/ and content/ next to it.
+
+
+2. Open the project
+-------------------
+  - Open the BaldiCpp-iOS folder and double-click BaldiCpp.xcodeproj. Xcode opens.
+  - If Xcode asks to "update to recommended settings", click "Don't Change" (or Cancel). The
+    settings are deliberate (iOS 6, 32-bit).
+  - The left column (the "Project navigator") lists BaldiCpp, src, content, Frameworks, Products.
+
+
+3. Run it in the iOS Simulator (no device or Apple account needed)
+-----------------------------------------------------------------
+  - At the top-left of the Xcode window, right of the Run (triangle) and Stop (square) buttons, is
+    the "scheme" pop-up. It reads something like "BaldiCpp > iPhone 6.1 Simulator" (Xcode 4.6) or
+    "BaldiCpp > iPhone Retina (3.5-inch)" (Xcode 5).
+  - Click the RIGHT part of that pop-up and pick an iPhone simulator. On Xcode 5 pick one WITHOUT
+    "64-bit" in its name (this build is 32-bit, like iOS 6 devices).
+      * Want the actual iOS 6 simulator on Xcode 5? Xcode menu > Preferences > Downloads >
+        Components > install "iOS 6.1 Simulator". Then it appears in the pop-up.
+  - Press the Run button (or Cmd+R). The first build takes a few minutes: it compiles the game
+    and copies about 360 MB of game data into the app. Later builds are faster.
+  - The Simulator app opens and the game starts in landscape. Click = touch. If the simulator
+    window is sideways, use the Simulator's Hardware menu > Rotate Left (Cmd+Left arrow).
+  - The simulator draws 3D in software, so it can be slow. A real device is the true speed test.
+  - To stop: the Stop button in Xcode (or Cmd+.).
+
+
+4. Run it on a real iPhone / iPod / iPad
+----------------------------------------
+  Xcode 4.5 - 5.1.1 can only install on a device with a PAID Apple Developer Program account
+  (free on-device installs only arrived with Xcode 7, which does not run on 10.8).
+  With a paid account:
+  - Xcode menu > Preferences > Accounts (Xcode 5) and add your Apple ID.
+    (Xcode 4.x: Window > Organizer > Devices, and follow "Use for Development".)
+  - Plug in the device (make sure your VM software passes the USB device through to the VM).
+  - Pick the device in the scheme pop-up (top-left), press Run. If Xcode shows a code signing
+    error with a "Fix Issue" button, click it.
+  - If it complains the bundle identifier is taken: click "BaldiCpp" at the top of the left column,
+    then the General tab (Xcode 5) or Info.plist (Xcode 4.x), and change "com.baldiport.BaldiCpp"
+    to something unique, e.g. com.yourname.baldi.
+  Jailbroken device without a paid account: use make-ipa.command (next section).
+
+
+4b. One click: build BaldiCpp.ipa for a jailbroken device
+-----------------------------------------------------------
+  - Double-click make-ipa.command (in this folder). Terminal opens and runs it:
+      * builds the Release app for the device, UNSIGNED (no Apple account needed),
+      * fake-signs it with ldid if ldid is installed (optional; AppSync Unified installs unsigned
+        apps too),
+      * packages it as BaldiCpp.ipa in this folder.
+  - It ends with "DONE: .../BaldiCpp.ipa". Copy that to the device and install it with Filza (tap
+    the .ipa -> Install) or AppInstaller. AppSync Unified must be installed on the device.
+  - Run it again after any change: it rebuilds and replaces BaldiCpp.ipa.
+  - If macOS says it cannot be opened ("unidentified developer"): right-click it -> Open -> Open.
+    If it says you lack permission: in Terminal run  chmod +x make-ipa.command  (once).
+  - Or run it from Terminal yourself:  bash make-ipa.command
+
+
+5. If something goes wrong
+--------------------------
+  - Build errors show in red. The full list is in the Issue navigator: the triangle-with-"!" icon
+    at the top of the left column. Copy the FIRST error's text (and the file name it names) and
+    send it to me -- the iPhone-specific code could not be compiled on Windows, so a small
+    first-build fix is expected and quick.
+  - While the app runs, the game's log appears in the bottom pane of Xcode (View menu > Debug
+    Area > Activate Console). Lines starting "app:" and "eng:" are the game's own messages;
+    send those too if the screen stays black or the app quits.
+  - DEBUG MODE on the device (the iOS counterpart of the Windows build's -debug option): with
+    Filza, create an empty file named  debug  in the app's Documents folder
+    (/var/mobile/Applications/<the folder holding BaldiCpp.app>/Documents/debug). From the next
+    launch the game writes Documents/perf.log, a frame-time breakdown every 60 frames. Delete the
+    file to turn it off again.
+
+
+Controls (the original iOS game's own on-screen controls)
+---------------------------------------------------------
+  The controls appear after your first touch. Joystick bottom-left = walk; swipe on the right half
+  = look; bottom-right buttons = look behind (mirror), run (legs), interact (hand), item (above).
+  Tap the item slots (top-right) to select an item; the pause icon is top-right.

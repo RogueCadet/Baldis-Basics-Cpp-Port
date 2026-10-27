@@ -1,0 +1,3 @@
+// Windows resources for baldi.exe: the genuine BALDI.exe application icon (all 9 sizes), extracted
+// by tools/extract-exe-icon.py. Resource id 1 = the icon Explorer and the window class use.
+1 ICON "baldi.ico"

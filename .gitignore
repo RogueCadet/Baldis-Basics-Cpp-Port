@@ -1,0 +1,44 @@
+# Build outputs and packages
+/build/
+/dist/
+/run/
+
+# Game data: baked from your own copy of Baldi's Basics Classic 1.4.3 (see README)
+/data/*
+!/data/DATA.md
+
+# Reference dumps taken from the retail iOS app
+/ios-ref/
+
+# Session notes not meant for the repo
+/NOTE-FOR-GLM.md
+/HANDOFF-S10.txt
+
+# Editor / OS junk
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dmp
+.DS_Store
+Thumbs.db
+xcuserdata/
+
+# Dev notes and personal analysis/probe tools (kept locally, not published)
+*.md
+/tools/ascii-scrub.js
+/tools/draw-preview.js
+/tools/font-census.js
+/tools/fields.js
+/tools/uses.js
+/tools/il2cpp-*.py
+/tools/ios-annotate.py
+/tools/ios-dump-hierarchy.py
+/tools/ios-ida-decompile.py
+/tools/probe-*.js
+/tools/render-compare.py
+/tools/shot-to-png.js
+/tools/sky-seams.py
+/tools/build-sim32.ps1
+/tools/shell-smoke.ps1
