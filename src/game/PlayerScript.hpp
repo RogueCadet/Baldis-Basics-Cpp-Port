@@ -30,6 +30,9 @@
 namespace bb {
 
 struct GameControllerScript; // fwd (full definition incl. out-of-line bodies: GameControllerScript.hpp)
+// -debug "infinite stamina": PlayerScript::StaminaCheck early-returns on it. Defined out-of-line
+// (bottom of GameControllerScript.hpp) so the C++11 library never needs the complete type here.
+bool dbgStaminaPinned(const GameControllerScript* gc);
 struct PlayerScript;         // fwd (defined below; the coroutine structs hold back-pointers)
 struct PlaytimeScript;       // fwd (pointer field below; real: PlaytimeScript.hpp, complete where
                              // the out-of-line OnTriggerEnter body needs it)
@@ -173,6 +176,16 @@ struct PlayerScript : public Component {
 
   void StaminaCheck() // private (C#)
   {
+    // -debug cheat ("infinite stamina"): the tank never drains and the bar stays pinned to
+    // 100 -- the effect the real drain would fight, without touching any authentic value. The
+    // flag read is out-of-line (dbgStaminaPinned, body at the bottom of GameControllerScript.hpp)
+    // because PlayerScript.hpp only forward-declares GameControllerScript.
+    if (dbgStaminaPinned(gc))
+    {
+      stamina = maxStamina;
+      staminaBar->value = 100.0f;
+      return;
+    }
     if (cc->velocity().magnitude() > 0.1f)
     {
       if ((ApplicationIsMobilePlatform() ? ReInputPlayer().GetButton("Run")   // iOS: Rewired "Run"

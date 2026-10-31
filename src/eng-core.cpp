@@ -1040,11 +1040,28 @@ void propagateHierarchy() {
 AudioLock::AudioLock() { state().audioMutex.lock(); }
 AudioLock::~AudioLock() { state().audioMutex.unlock(); }
 
+// ---- Legacy UnityEngine.Input surface (InputManager.asset axes/buttons) ----------------------
+// Most of the game reads input through Rewired (the game's InputManager re-dispatches the
+// Rewired actions), but the 31718 easter-egg TestRoom scripts read the LEGACY Input surface
+// directly: PlayerMovement (GetAxis "Forward"/"Strafe", GetButton "Run"), and AgentTest/
+// ClickableTest/CameraScript_Simple around it. Nothing populated those axes, so the TestRoom
+// player could look but not walk (user report). Unity ramps held keys with
+// gravity/sensitivity; the port snaps to the held key (a sub-second ramp is invisible here).
+// Keys are Unity's legacy axis definitions for this project: Forward = W/S, Strafe = D/A,
+// Run = the shifts.
+static void pumpLegacyAxes() {
+  State& g = state();
+  g.axes["Forward"] = (g.keyHeld[(int)bb::KeyCode::W] ? 1.0f : 0.0f) - (g.keyHeld[(int)bb::KeyCode::S] ? 1.0f : 0.0f);
+  g.axes["Strafe"] = (g.keyHeld[(int)bb::KeyCode::D] ? 1.0f : 0.0f) - (g.keyHeld[(int)bb::KeyCode::A] ? 1.0f : 0.0f);
+  g.namedButtons["Run"] = g.keyHeld[(int)bb::KeyCode::LeftShift];
+}
+
 void runFullFrame(float unscaledDt) {
   std::lock_guard<std::recursive_mutex> audioLock(state().audioMutex);   // see State::audioMutex
   const double t0 = profNow();
   beginFrame(unscaledDt);
   if (state().mobile) rewiredBeginFrame();   // touch controls -> Rewired actions, before scripts
+  pumpLegacyAxes();   // legacy InputManager axes, fresh for both the fixed and update phases
   static double hierCost = 0.0;
   static int hierFrames = 0;
   runFixedSteps();
@@ -1759,6 +1776,8 @@ void applySelectableState(bb::Selectable* s, bool highlighted) {
 
 void uiPointerMove(float px, float py) {
   State& g = state();
+  g.uiPointerX = px;                 // the -debug menu's hover/click hit test reads these
+  g.uiPointerY = py;
   if (!bb::Cursor::visible) {
     if (g.hoveredButton) {
       dispatchPointerEvent(g.hoveredButton->gameObject, false);
@@ -1790,7 +1809,157 @@ void uiPointerMove(float px, float py) {
   }
 }
 
-// The UI components buildDrawList walks, by type, in g.gos then go->components order (the order
+// ---- -debug cheat menu (the /-toggled bottom-left panel) -------------------------------------
+// GameControllerScript calls bb::debugUiFrame every frame of a story/endless run while the host
+// turned on the debug UI; this module draws the bottom-left hint + the panel and routes clicks.
+// Rendering is plain DrawQuads APPENDED to the canvas pass output (after the last sorted entry)
+// so the menu always paints over everything, including panels: it is a debug overlay, not a
+// Unity-style node. Text shapes with the COMIC_Pro bake (the game's own in-game face, always in
+// data/fonts-index.json), the same glyph math as the canvas TMP pass, expressed directly in row
+// space: glyph top edge y0 = baselineRow - yo*pointScale, height h*pointScale down.
+static const char* kDebugUiFontGuid = "21749360ea10093439a1f9266c91c718";  // COMIC_Pro
+
+static TMPFontData* debugUiFont() {
+  return fontForGuid(kDebugUiFontGuid);
+}
+
+static float debugUiTextWidth(const char* text, float size) {
+  TMPFontData* font = debugUiFont();
+  if (!font || !text) return 0.0f;
+  const float ps = font->pointScaleFor(size);
+  float w = 0.0f;
+  for (const char* p = text; *p; p++) {
+    const TMPFontGlyph* gl = font->glyphFor((int)(unsigned char)*p);
+    w += gl ? gl->adv * ps : size * 0.5f;
+  }
+  return w;
+}
+
+static void debugUiPushText(float baselineRow, float penX, float size, const bb::Color& c,
+                            const char* text) {
+  State& g = state();
+  TMPFontData* font = debugUiFont();
+  if (!font || !text) return;
+  const float ps = font->pointScaleFor(size);
+  for (const char* p = text; *p; p++) {
+    const TMPFontGlyph* gl = font->glyphFor((int)(unsigned char)*p);
+    if (!gl) { penX += size * 0.5f; continue; }
+    if (*p != ' ') {
+      DrawQuad q;
+      q.x0 = penX + gl->xo * ps;
+      q.y0 = baselineRow - gl->yo * ps;
+      q.x1 = q.x0 + gl->w * ps;
+      q.y1 = q.y0 + gl->h * ps;
+      q.r = c.r; q.g = c.g; q.b = c.b; q.a = c.a;
+      q.u0 = gl->u0; q.v0 = gl->v0; q.u1 = gl->u1; q.v1 = gl->v1;
+      q.canvasLayer = 0;
+      q.textured = true;
+      q.font = font;
+      g.drawList.push_back(q);
+    }
+    penX += gl->adv * ps;
+  }
+}
+
+static void debugUiMiniQuad(float x0, float y0, float x1, float y1, const bb::Color& c) {
+  State& g = state();
+  DrawQuad q;
+  q.x0 = x0; q.y0 = y0; q.x1 = x1; q.y1 = y1;
+  q.r = c.r; q.g = c.g; q.b = c.b; q.a = c.a;
+  q.canvasLayer = 0;
+  q.textured = false;                      // solid fill: the menu's panel/hover/chips
+  g.drawList.push_back(q);
+}
+
+// ENGINE-SIDE impls of the bb::debug* API (eng.h). The bb:: functions that game scripts call live
+// next to bb::setAmbientLight at the bottom of this file -- every other engine API for game code
+// follows the same split.
+void debugUiFrameImpl(bb::DebugUiSink* sink, bool open) {
+  State& g = state();
+  g.debugUiSink = sink;                    // buildDrawList draws from this later in-frame
+  g.debugUiOpen = open;                    // also arms the game-side mouse swallow
+  g.dbgHoverRow = -1;
+
+  // Click routing happens HERE (in the game's Update), hit-testing against the PREVIOUS build's
+  // row rects: rows are fixed-size and static-labelled, so the one-frame lag is invisible. The
+  // raw edge is read (not Input::GetMouseButtonDown) because that API suppresses game reads
+  // while open -- but any edge the menu consumes must be cleared so nothing replays it later.
+  if (open && sink && g.mouseEdge[0]) {
+    g.mouseEdge[0] = false;
+    const float mx = g.uiPointerX, my = g.uiPointerY;
+    for (int i = 0; i < g.dbgRowCount && i < State::kDebugUiMaxRows; i++) {
+      if (mx >= g.dbgRowX[i] && mx <= g.dbgRowX[i] + g.dbgRowW[i] &&
+          my >= g.dbgRowY[i] && my <= g.dbgRowY[i] + g.dbgRowH[i]) {
+        sink->debugUiActivate(i);
+        break;
+      }
+    }
+  }
+  // Hover highlight index for this frame (buildDrawList uses it to fill the row).
+  if (open && sink) {
+    const float mx = g.uiPointerX, my = g.uiPointerY;
+    for (int i = 0; i < g.dbgRowCount && i < State::kDebugUiMaxRows; i++) {
+      if (mx >= g.dbgRowX[i] && mx <= g.dbgRowX[i] + g.dbgRowW[i] &&
+          my >= g.dbgRowY[i] && my <= g.dbgRowY[i] + g.dbgRowH[i]) {
+        g.dbgHoverRow = i;
+        break;
+      }
+    }
+  }
+}
+
+// (bb::debugUiAvailable / bb::cheatNpcIgnore / bb::setCheatNpcIgnore live in the bb section at
+// the bottom of this file; they only need State flags, so their bodies are one-liners there.)
+// buildDrawList's tail (called from buildDrawList after the canvas emission): lays out the hint
+// and, when open, the panel -- bottom-left, over everything.
+static void buildDebugUiOverlay() {
+  State& g = state();
+  if (!(debugFlags() & kDebugUi) || !g.debugUiSink) return;   // -debug off, or not in game
+  const float sh = (float)g.screenH;
+
+  // The HINT is always there in-game so the / shortcut is discoverable ("debug menu - / opens
+  // it" / "debug menu - / closes it" once opened). A dark backing strip keeps it readable over
+  // any floor texture (the pause HUD's trick, at one line's height).
+  const float hintSize = 16.0f, hintBaseline = sh - 16.0f;
+  const char* hint = g.debugUiOpen ? "- / closes it" : "- / opens it";
+  const float hintW = debugUiTextWidth("debug menu", hintSize) + 7.0f + debugUiTextWidth(hint, hintSize);
+  debugUiMiniQuad(10.0f, sh - 34.0f, 14.0f + hintW + 10.0f, sh - 4.0f, bb::Color(0.0f, 0.0f, 0.0f, 0.55f));
+  debugUiPushText(hintBaseline, 14.0f, hintSize, bb::Color(1.0f, 1.0f, 1.0f, 0.95f), "debug menu");
+  debugUiPushText(hintBaseline, 14.0f + debugUiTextWidth("debug menu", hintSize) + 7.0f,
+                  hintSize, bb::Color(1.0f, 0.85f, 0.4f, 0.95f), hint);
+  if (!g.debugUiOpen) { g.dbgRowCount = 0; return; }
+
+  // The PANEL. Fixed geometry (no per-frame meat): title bar + one 26px row per cheat, anchored
+  // above the hint on the left edge. Rows re-fill the hit-rect table every build.
+  const int rows = g.debugUiSink->debugUiRows();
+  const float rowH = 26.0f, titleH = 30.0f, pad = 6.0f;
+  const float panelW = 310.0f, panelX = 12.0f;
+  const float panelH = titleH + rows * rowH + pad * 2.0f;
+  const float panelY = sh - 44.0f - panelH;      // anchors above the hint, grows upward
+  debugUiMiniQuad(panelX, panelY, panelX + panelW, panelY + panelH, bb::Color(0.0f, 0.0f, 0.0f, 0.68f));
+  debugUiPushText(panelY + 23.0f, panelX + pad + 2.0f, 19.0f,
+                  bb::Color(1.0f, 0.9f, 0.3f, 1.0f), "DEBUG MENU");
+  int stored = 0;
+  for (int i = 0; i < rows && i < State::kDebugUiMaxRows; i++) {
+    bool toggle = false, on = false;
+    const char* label = g.debugUiSink->debugUiRow(i, &toggle, &on);
+    if (!label) continue;
+    const float rx = panelX + pad, ry = panelY + titleH + pad + (float)i * rowH;
+    g.dbgRowX[i] = rx; g.dbgRowY[i] = ry; g.dbgRowW[i] = panelW - pad * 2.0f; g.dbgRowH[i] = rowH;
+    stored = i + 1;
+    if (i == g.dbgHoverRow)
+      debugUiMiniQuad(rx, ry, rx + panelW - pad * 2.0f, ry + rowH, bb::Color(1.0f, 1.0f, 1.0f, 0.18f));
+    debugUiPushText(ry + 20.0f, rx + 8.0f, 18.0f, bb::Color(1.0f, 1.0f, 1.0f, 1.0f), label);
+    if (toggle) {
+      const char* chip = on ? "[ X ]" : "[   ]";
+      debugUiPushText(ry + 20.0f, rx + panelW - pad * 2.0f - 8.0f - debugUiTextWidth(chip, 18.0f),
+                      18.0f, on ? bb::Color(0.4f, 1.0f, 0.45f, 1.0f) : bb::Color(1.0f, 1.0f, 1.0f, 0.55f),
+                      chip);
+    }
+  }
+  g.dbgRowCount = stored;                 // hit table refreshed; stale old rows drop out
+}
+
 // the full walks used), cached per State::componentVersion. Three full walks over every School
 // component with dynamic_casts, every frame, found the HUD's few dozen UI elements.
 struct UiLists {
@@ -2205,6 +2374,10 @@ void buildDrawList() {
                    [](const std::pair<std::vector<int>, DrawQuad>& a,
                       const std::pair<std::vector<int>, DrawQuad>& b) { return a.first < b.first; });
   for (size_t i = 0; i < uiSorted.size(); i++) g.drawList.push_back(uiSorted[i].second);
+
+  // The -debug cheat menu LAST: it is a debug overlay, never an authored Unity canvas, and must
+  // paint over the HUD (and any pause/menu canvas) on every resolution.
+  buildDebugUiOverlay();
 }
 
 // ---------------------------------------------------------------------------
@@ -3427,6 +3600,15 @@ GameObject* GameObject::Find(const char* name) {
   return 0;
 }
 
+GameObject* GameObject::FindGameObjectWithTag(const char* tag_) {
+  if (!tag_) return 0;
+  for (size_t i = 0; i < eng::liveGameObjects().size(); i++) {
+    GameObject* go = eng::liveGameObjects()[i];
+    if (go->activeSelf && go->tag == tag_) return go; // Unity: active objects only, first match
+  }
+  return 0;
+}
+
 // ---- Transform / Component plumbing ----------------------------------------
 std::string Transform::name() const { return go ? go->name : std::string(); }
 std::string Transform::tag() const { return go ? go->tag : std::string("Untagged"); }
@@ -3653,6 +3835,10 @@ float Input::GetAxis(const char* axis) {
 bool Input::GetMouseButtonDown(int button) {
   eng::State& g = eng::state();
   if (button < 0 || button >= 8) return false;
+  // While the -debug menu is open a tap is the menu's click, not the game's: game readers get
+  // no edge (the panel reads g.mouseEdge directly in debugUiFrameImpl). Same for the held form:
+  // a click-drag across the panel must not "use item"/shoot mid-drag.
+  if (g.debugUiOpen) { g.mouseEdge[button] = false; return false; }
   const bool e = g.mouseEdge[button];
   g.mouseEdge[button] = false;
   return e;
@@ -3660,7 +3846,16 @@ bool Input::GetMouseButtonDown(int button) {
 bool Input::GetMouseButton(int button) {  // Unity held-state form (Interact/UseItem: Mouse0/Mouse1)
   eng::State& g = eng::state();
   if (button < 0 || button >= 8) return false;
+  if (g.debugUiOpen) { g.mouseEdge[button] = false; return false; }
   return g.mouseHeld[button];
+}
+
+Vec3 Input::mousePosition() {
+  // Unity Input.mousePosition: mouse pixels in the client area, ORIGIN AT THE BOTTOM-LEFT. The
+  // engine's pointer store (uiPointerMove) is top-left (screen/Win32 convention, used by the UI
+  // hit tests), so flip y; no pointer seen yet reads (0,0,0), like Unity's first frame.
+  eng::State& g = eng::state();
+  return Vec3(g.uiPointerX, (float)g.screenH - g.uiPointerY, 0.0f);
 }
 
 // ---- PlayerPrefs (file-backed INI at run/prefs.ini) -----------------------------
@@ -4543,6 +4738,25 @@ void Debug::Log(const char* msg) {
   fflush(stdout);
 }
 void setAmbientLight(const Color& c) { eng::state().ambientLight = c; }
+
+// ---- -debug cheat menu (the bottom-left panel; engine renders, game supplies rows) -----------
+// The engine-side machinery (pointer store, hit tests, quad emission) is eng::debugUiFrameImpl +
+// eng::buildDebugUiOverlay above; these thin wrappers are the game-facing API.
+bool debugUiAvailable() { return (eng::debugFlags() & eng::kDebugUi) != 0; }
+void debugUiFrame(DebugUiSink* sink, bool open) { eng::debugUiFrameImpl(sink, open); }
+bool cheatNpcIgnore() { return eng::state().cheatNpcIgnore; }
+void setCheatNpcIgnore(bool on) { eng::state().cheatNpcIgnore = on; }
+void debugUiEsp(bool on, const char* const* gameObjectNames, int count) {
+  // "ESP through walls": the billboard pass redraws sprites whose GameObject (root or any
+  // ancestor) carries one of these names with depth testing off. Names are copied once per
+  // toggle; toggling off clears the list, which makes the pass a complete no-op.
+  eng::State& g = eng::state();
+  g.debugEspOn = on;
+  g.debugEspNames.clear();
+  if (on && gameObjectNames)
+    for (int i = 0; i < count; i++)
+      if (gameObjectNames[i]) g.debugEspNames.push_back(std::string(gameObjectNames[i]));
+}
 void setSkybox(Material* m) { eng::state().skybox = m; }
 
 // ---- raycast surface (providers in eng-core's eng block) --------------------------------

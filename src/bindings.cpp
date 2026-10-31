@@ -10,6 +10,7 @@
 #include "game/ControlsMenu.hpp"
 #include "game/MobileController.hpp"
 #include "game/ItemImageScript.hpp"
+#include "game/AgentTest.hpp"
 #include "game/AILocationSelectorScript.hpp"
 #include "game/AlarmClockScript.hpp"
 #include "game/AmbienceScript.hpp"
@@ -22,6 +23,8 @@
 #include "game/BsodaSparyScript.hpp"
 #include "game/BullyScript.hpp"
 #include "game/CameraScript.hpp"
+#include "game/CameraScript_Simple.hpp"
+#include "game/ClickableTest.hpp"
 #include "game/CraftersScript.hpp"
 #include "game/CraftersTriggerScript.hpp"
 #include "game/CursorControllerScript.hpp"
@@ -94,6 +97,15 @@ static void bind_AlarmClockScript(bb::AlarmClockScript* s, const eng::JsonValue&
   ctx.bindComp<bb::BaldiScript>(f, "baldi", s->baldi);
   ctx.bindAudioClip(f, "ring", s->ring);
   ctx.bindComp<bb::AudioSource>(f, "audioDevice", s->audioDevice);
+}
+
+// AgentTest (AgentTest.hpp)
+static void bind_AgentTest(bb::AgentTest* s, const eng::JsonValue& f, eng::BindCtx& ctx) {
+  ctx.bindBool(f, "db", s->db);
+  ctx.bindTransformRef(f, "player", s->player);
+  ctx.bindTransformRef(f, "wanderTarget", s->wanderTarget);
+  ctx.bindComp<bb::AILocationSelectorScript>(f, "wanderer", s->wanderer);
+  ctx.bindFloat(f, "coolDown", s->coolDown);
 }
 
 // AmbienceScript (AmbienceScript.hpp)
@@ -207,6 +219,20 @@ static void bind_CameraScript(bb::CameraScript* s, const eng::JsonValue& f, eng:
   ctx.bindVec3(f, "jumpHeightV3", s->jumpHeightV3);
 }
 
+// CameraScript_Simple (CameraScript_Simple.hpp) - the 31718 TestRoom follow camera
+static void bind_CameraScript_Simple(bb::CameraScript_Simple* s, const eng::JsonValue& f, eng::BindCtx& ctx) {
+  ctx.bindGameObject(f, "player", s->player);
+  ctx.bindInt(f, "lookBehind", s->lookBehind);
+  ctx.bindVec3(f, "offset", s->offset);
+}
+
+// ClickableTest (ClickableTest.hpp)
+static void bind_ClickableTest(bb::ClickableTest* s, const eng::JsonValue& f, eng::BindCtx& ctx) {
+  ctx.bindTransformRef(f, "player", s->player);
+  ctx.bindComp<bb::AudioSource>(f, "test", s->test);
+  ctx.bindAudioClip(f, "testHit", s->testHit);
+}
+
 // CraftersScript (CraftersScript.hpp)
 static void bind_CraftersScript(bb::CraftersScript* s, const eng::JsonValue& f, eng::BindCtx& ctx) {
   ctx.bindBool(f, "db", s->db);
@@ -223,7 +249,10 @@ static void bind_CraftersScript(bb::CraftersScript* s, const eng::JsonValue& f, 
   ctx.bindGameObject(f, "sprite", s->sprite);
   ctx.bindComp<bb::GameControllerScript>(f, "gc", s->gc);
   ctx.bindComp<bb::NavMeshAgent>(f, "agent", s->agent);
-  // skipped craftersRenderer (Renderer*): identity-only, unused in logic
+  // craftersRenderer (Renderer*): scene fileID 20876 = the SAME SpriteRenderer spriteImage binds
+  // (SpriteRenderer is a Renderer since the isVisible-hook unification). Leaving this null was a
+  // crash: FixedUpdate derefs it the first fixed step with notebooks >= 7 (finale).
+  ctx.bindComp<bb::Renderer>(f, "craftersRenderer", s->craftersRenderer);
   ctx.bindComp<bb::SpriteRenderer>(f, "spriteImage", s->spriteImage);
   ctx.bindSprite(f, "angrySprite", s->angrySprite);
   ctx.bindComp<bb::AudioSource>(f, "audioDevice", s->audioDevice);
@@ -876,6 +905,7 @@ static void bind_YouWonScript(bb::YouWonScript* s, const eng::JsonValue& f, eng:
 
 bb::Component* makeScript(const std::string& className) {
   if (className == "AILocationSelectorScript") return new bb::AILocationSelectorScript();
+  if (className == "AgentTest") return new bb::AgentTest();
   if (className == "AlarmClockScript") return new bb::AlarmClockScript();
   if (className == "AmbienceScript") return new bb::AmbienceScript();
   if (className == "AudioQueueScript") return new bb::AudioQueueScript();
@@ -887,6 +917,8 @@ bb::Component* makeScript(const std::string& className) {
   if (className == "BsodaSparyScript") return new bb::BsodaSparyScript();
   if (className == "BullyScript") return new bb::BullyScript();
   if (className == "CameraScript") return new bb::CameraScript();
+  if (className == "CameraScript_Simple") return new bb::CameraScript_Simple();
+  if (className == "ClickableTest") return new bb::ClickableTest();
   if (className == "CraftersScript") return new bb::CraftersScript();
   if (className == "CraftersTriggerScript") return new bb::CraftersTriggerScript();
   if (className == "CursorControllerScript") return new bb::CursorControllerScript();
@@ -950,6 +982,10 @@ void bindScript(const std::string& className, bb::Component* c, const JsonValue&
     bind_AILocationSelectorScript(static_cast<bb::AILocationSelectorScript*>(c), f, ctx);
     return;
   }
+  if (className == "AgentTest") {
+    bind_AgentTest(static_cast<bb::AgentTest*>(c), f, ctx);
+    return;
+  }
   if (className == "AlarmClockScript") {
     bind_AlarmClockScript(static_cast<bb::AlarmClockScript*>(c), f, ctx);
     return;
@@ -992,6 +1028,14 @@ void bindScript(const std::string& className, bb::Component* c, const JsonValue&
   }
   if (className == "CameraScript") {
     bind_CameraScript(static_cast<bb::CameraScript*>(c), f, ctx);
+    return;
+  }
+  if (className == "CameraScript_Simple") {
+    bind_CameraScript_Simple(static_cast<bb::CameraScript_Simple*>(c), f, ctx);
+    return;
+  }
+  if (className == "ClickableTest") {
+    bind_ClickableTest(static_cast<bb::ClickableTest*>(c), f, ctx);
     return;
   }
   if (className == "CraftersScript") {

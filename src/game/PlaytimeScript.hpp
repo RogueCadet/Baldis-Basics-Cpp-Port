@@ -31,6 +31,8 @@ struct PlaytimeScript : public Component {
   }
 
   virtual void Update(float dt) {
+    // -debug cheat ("make NPCs ignore you"): her timers freeze and she never switches to hunt mode.
+    if (cheatNpcIgnore()) return;
     if (coolDown > 0.0f)
     {
       coolDown -= 1.0f * Time::deltaTime();
@@ -47,6 +49,8 @@ struct PlaytimeScript : public Component {
   }
 
   virtual void FixedUpdate() {
+    // -debug cheat: the hunt raycast and the chase agent stop with the cheat on.
+    if (cheatNpcIgnore()) return;
     if (!ps->jumpRope)
     {
       Vec3 direction = player->position - transform->position;

@@ -375,8 +375,7 @@ static const bool s_traceLoad = getenv("ENG_TRACE_LOAD") != 0;
 
 // scripts trimmed/excluded from the port (charter); their comps are skipped silently
 static bool isTrimmedScript(const std::string& name) {
-  return name == "NavMeshAgentRay" || name == "CameraScript_Simple" || name == "ClickableTest" ||
-         name == "AgentTest" || name == "DebugScript";   // ControlsMenu is ported now (game/ControlsMenu.hpp)
+  return name == "NavMeshAgentRay" || name == "DebugScript";   // ControlsMenu is ported now (game/ControlsMenu.hpp)
 }
 
 // ---- small readers -----------------------------------------------------------------------------
@@ -1010,6 +1009,9 @@ void unloadScene(bool keepDontDestroy) {
   s_currentScene.clear();
   s_currentSkybox.clear();     // sky state follows the scene (see currentSceneSkybox)
   g.skybox = 0;                // ...and so does a runtime RenderSettings.skybox (Unity resets it per scene)
+  g.ambientLight = bb::Color(); // RenderSettings.ambientLight resets with the scene (finale red -> white again)
+  g.debugUiSink = 0;           // the sink dies with the scene's gc; a stale pointer would crash
+  g.debugUiOpen = false;       // ...and the panel cannot outlive the game it cheats in
   g.navPolys.clear();          // the navmesh belongs to the scene
 }
 

@@ -79,6 +79,19 @@ struct MathGameScript : public Component {
       questionInProgress = false;
       CheckAnswer();
     }
+    // -debug cheat ("auto-correct math questions"): one tick after a problem appears, the input is
+    // filled with the right answer and OK'd for you. The impossible corrupted question (problem 3)
+    // is auto-answered WITH "0" -- a deliberately WRONG submission, exactly as if the player had
+    // typed junk and pressed enter (baldi gets angrier; spoop mode kicks in) -- instead of being
+    // skipped silently. Pressing / mid-notebook still opens the menu instead. (blank = problem
+    // submitted >3, i.e. the notebook is done -- the auto-answer never touches it.)
+    if (gc->dbgAutoAnswer && questionInProgress && problem <= 3 && !autoAnswerDone)
+    {
+      autoAnswerDone = true;
+      questionInProgress = false;
+      playerAnswer->SetText(impossibleMode ? "0" : csharpToString(solution));
+      CheckAnswer();
+    }
     if (problem > 3)
     {
       endDelay -= 1.0f * Time::unscaledDeltaTime();
@@ -94,6 +107,7 @@ struct MathGameScript : public Component {
   {
     playerAnswer->SetText("");
     problem++;
+    autoAnswerDone = false; // -debug cheat: each new problem gets exactly one auto-submit
     playerAnswer->ActivateInputField();
     // TEMP BB_MATHDBG (remove after the thinkpad is verified interactive): branch/inputs.
     if (getenv("BB_MATHDBG")) {
@@ -378,6 +392,7 @@ struct MathGameScript : public Component {
   // (hintText / endlessHintText: private, non-serialized, sole consumer NewProblem -> namespace
   //  scope tables just above the class)
   bool questionInProgress = false;     // private (C#)
+  bool autoAnswerDone = false;         // -debug cheat: one-shot per problem (reset in NewProblem)
   bool impossibleMode = false;         // private (C#)
   int problemsWrong = 0;               // private (C#)
   AudioClip* audioQueue[20] = {0};     // private (C#)

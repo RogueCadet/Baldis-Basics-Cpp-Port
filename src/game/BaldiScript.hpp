@@ -42,6 +42,9 @@ struct BaldiScript : public Component {
   }
 
   virtual void Update(float dt) {
+    // -debug cheat ("make NPCs ignore you"): Baldi's whole per-frame life (timers, movement starts,
+    // even the endless-mode self-anger) short-circuits -- he stands where he last slapped.
+    if (cheatNpcIgnore()) return;
     if (timeToMove > 0.0f) //If timeToMove is greater then 0, decrease it
     {
       timeToMove -= 1.0f * Time::deltaTime();
@@ -86,6 +89,8 @@ struct BaldiScript : public Component {
   }
 
   virtual void FixedUpdate() {
+    // -debug cheat: no slaps, no chase agent speed, no seeing the player.
+    if (cheatNpcIgnore()) return;
     if (moveFrames > 0.0f) //Move for a certain amount of frames, and then stop moving.(Ruler slapping)
     {
       moveFrames -= 1.0f;

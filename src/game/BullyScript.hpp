@@ -30,6 +30,8 @@ struct BullyScript : public Component {
   }
 
   virtual void Update(float dt) {
+    // -debug cheat ("make NPCs ignore you"): no talent-show drop-in, no guilt ticks.
+    if (cheatNpcIgnore()) return;
     if (waitTime > 0.0f) //Decrease the waittime
     {
       waitTime -= Time::deltaTime();
@@ -53,6 +55,8 @@ struct BullyScript : public Component {
   }
 
   virtual void FixedUpdate() {
+    // -debug cheat: no seeing you, no taunts, no guilt from you.
+    if (cheatNpcIgnore()) return;
     Vec3 direction = player->position - transform->position;
     RaycastHit raycastHit;
     if (Physics::Raycast(transform->position + Vec3(0.0f, 4.0f, 0.0f), direction, &raycastHit, std::numeric_limits<float>::infinity(), 769, QueryTriggerInteraction::Ignore) && raycastHit.transform->tag() == "Player" && (transform->position - player->position).magnitude() <= 30.0f && active)
@@ -80,6 +84,8 @@ struct BullyScript : public Component {
   }
 
   virtual void OnTriggerEnter(Collider* other) {
+    // -debug cheat: he ignores you even on touch (no item confiscation).
+    if (cheatNpcIgnore()) return;
     if (other->transform->tag() == "Player") // If touching the player
     {
       if (gc->item[0] == 0 && gc->item[1] == 0 && gc->item[2] == 0) // If the player has no items

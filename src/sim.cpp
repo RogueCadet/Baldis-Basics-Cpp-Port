@@ -17,6 +17,7 @@
 #include "eng-internal.h"
 
 #include "game/GameControllerScript.hpp"  // pulls PlayerScript/BaldiScript/CameraScript et al
+#include "game/CraftersScript.hpp"
 #include "game/PickupAnimationScript.hpp"
 #include "game/NotebookScript.hpp"
 #include "game/StubScripts.hpp"           // InputManager (the DDoL singleton the swap checks pin)
@@ -26,6 +27,10 @@
 #include "game/MathGameScript.hpp"
 #include "game/PrincipalScript.hpp"
 #include "game/TapePlayerScript.hpp"
+#include "game/PlayerMovement.hpp"   // the 31718 TestRoom playable (legacy Input axes)
+#include "game/CameraScript_Simple.hpp"
+#include "game/AgentTest.hpp"
+#include "game/ClickableTest.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -1012,6 +1017,33 @@ bb::PlayerScript* testScriptBinding() {
       check("school-door-click-opens", opened == (int)doors.size(),
             f2s((float)opened) + " of " + f2s((float)doors.size()) + " doors opened on a real click -- " + firstFail);
     }
+  }
+
+  // CRAFTERS renderer binding (crash: baldi.exe.11808.dmp, AV at bb::Renderer::isVisible +0x18
+  // with rcx=0 -- the serialized `Renderer* craftersRenderer` was left null by the binder with a
+  // stale "identity-only" note, and CraftersScript::FixedUpdate derefs it on the first fixed step
+  // once notebooks >= 7, the finale). School.unity: craftersRenderer and spriteImage both carry
+  // fileID 20876 = Arts' SpriteRenderer, so the binding must resolve through the
+  // Component -> Renderer -> SpriteRenderer chain.
+  {
+    std::vector<bb::CraftersScript*> cs;
+    {
+      std::vector<bb::GameObject*>& all = eng::liveGameObjects();
+      for (size_t i = 0; i < all.size(); i++)
+        if (bb::CraftersScript* c = all[i]->GetComponent<bb::CraftersScript>()) cs.push_back(c);
+    }
+    int bound = 0, visibleOk = 0;
+    for (size_t i = 0; i < cs.size(); i++) {
+      if (!cs[i]->craftersRenderer) continue;
+      bound++;
+      // The actual call that crashed -- must evaluate without touching null.
+      if (cs[i]->craftersRenderer->isVisible()) visibleOk++;
+    }
+    printf("CRAFTERS scripts=%d rendererBound=%d isVisibleEvaluated=%d\n",
+           (int)cs.size(), bound, visibleOk);
+    check("school-crafters-renderer-bound", !cs.empty() && bound == (int)cs.size(),
+          f2s((float)bound) + " of " + f2s((float)cs.size()) +
+          " CraftersScript instances carry a non-null craftersRenderer (null = finale crash)");
   }
 
   // TEMPORARY walk-repro (BB_WALKREPRO): march the real player capsule into the nearest wall quad
@@ -3713,6 +3745,236 @@ void dumpDrawList(const char* path) {
 }
 } // namespace
 
+// -debug cheat menu, end-to-end: '/' opens the bottom-left panel (pause protocol: timeScale 0 +
+// unlocked cursor), row 0 freezes NPCs including Baldi, row 1 hides every NPC but Baldi with
+// restore-on-off, row 2 flips the math auto-correct flag, row 3 pins stamina, row 4 turns the
+// NPC wallhack on, and close ('/' again) puts the run back the way it was. Runs LAST in main():
+// it mutates the School scene's gc state.
+namespace {
+#define CLICK_ROW(row) do { \
+    eng::uiPointerMove(g.dbgRowX[(row)] + g.dbgRowW[(row)] * 0.5f, g.dbgRowY[(row)] + g.dbgRowH[(row)] * 0.5f); \
+    eng::injectMouse(0, true); \
+    eng::runFullFrame(1.0f / 50.0f); \
+    eng::injectMouseRelease(0); \
+    eng::runFullFrame(1.0f / 50.0f); \
+  } while (0)
+
+void testDebugMenuCheats() {
+  eng::unloadScene(true);
+  eng::loadScene("School");
+  eng::setScreenSize(1280, 720);
+  eng::State& g = eng::state();
+  const unsigned prevDbgFlags = eng::debugFlags();
+  eng::setDebugFlags(eng::kDebugUi);         // the -debug presence bit, alone for this test
+
+  bb::GameControllerScript* gc = 0;
+  {
+    const std::vector<bb::GameObject*>& all = eng::liveGameObjects();
+    for (size_t i = 0; i < all.size(); i++)
+      if (bb::GameControllerScript* c = all[i]->GetComponent<bb::GameControllerScript>()) { gc = c; break; }
+  }
+  if (!gc) { check("debug-menu-cheats", false, "no GameControllerScript in School"); eng::setDebugFlags(prevDbgFlags); return; }
+
+  const std::string prevMode = gc->mode;
+  const bool prevSpoop = gc->spoopMode;
+  const bool prevBaldiVisible = gc->baldi != 0 && gc->baldi->activeSelf;
+  gc->mode = "story"; gc->spoopMode = false;
+
+  // ---- '/' opens: menu open flag, the run freezes, the cursor unlocks, the panel draws.
+  // The player is WALKING when '/' is pressed: PlayerScript's per-frame "velocity > 0" lock used
+  // to re-hide the cursor the same frame the menu unlocked it (the user report "may need a few
+  // open/close cycles to get the mouse"), so the cursor must come free despite leftover motion.
+  const bb::Vec3 walkHome = gc->player->transform->position;
+  eng::injectKey((int)bb::KeyCode::W, true);
+  eng::runFullFrame(1.0f / 50.0f);           // move: cc->velocity > 0 through the open frame
+  eng::injectKey(47, true);                  // Unity KeyCode.Slash == 47 (W still held)
+  eng::runFullFrame(1.0f / 50.0f);
+  eng::injectKeyRelease(47);
+  eng::injectKeyRelease((int)bb::KeyCode::W);
+  eng::runFullFrame(1.0f / 50.0f);
+  const bool walked = (gc->player->transform->position - walkHome).magnitude() > 0.01f;
+  const bool opened = gc->dbgMenuOpen && bb::Time::timeScale == 0.0f && !gc->mouseLocked &&
+                      bb::Cursor::visible;   // the OS-cursor flag PlayerScript's lock race flips
+  eng::buildDrawList();
+  // The panel's own solid bg at 720p: x 12..322, bottom edge at sh-44 = 676 (height 172 = title 30
+  // + 5 rows x 26 + 2x6 pad). Exact enough that no HUD rect can collide with the predicate.
+  auto isPanelBg = [](const eng::DrawQuad& q) {
+    return !q.textured && fabsf(q.x0 - 12.0f) < 0.4f && fabsf(q.x1 - 322.0f) < 0.4f &&
+           fabsf(q.y0 - 504.0f) < 0.8f && fabsf(q.y1 - 676.0f) < 0.8f && q.a > 0.6f;
+  };
+  const bool panelSolid = [&] {
+    for (size_t i = 0; i < g.drawList.size(); i++) if (isPanelBg(g.drawList[i])) return true;
+    return false;
+  }();
+  const int rows = g.dbgRowCount;
+  const bool row0 = rows > 0 && g.dbgRowY[0] > 0.0f && g.dbgRowY[0] < 720.0f;
+  check("debug-menu-open-draws-panel", opened && panelSolid && rows == 5 && row0 && walked,
+        "open=" + i2s((int)opened) + " solidPanel=" + i2s((int)panelSolid) + " rows=" + i2s(rows) +
+        " row0Y=" + f2s(row0 ? g.dbgRowY[0] : -1.0f) + " timeScale=" + f2s(bb::Time::timeScale) +
+        " walked=" + i2s((int)walked) + " cursorVisible=" + i2s((int)bb::Cursor::visible));
+
+  // ---- row 0 clicked: NPCs ignore you -- Baldi active but does not move a millimetre
+  {
+    CLICK_ROW(0);
+    const bool ignoreOn = bb::cheatNpcIgnore();
+    const bb::Vec3 home = gc->baldi ? gc->baldi->transform->position : bb::Vec3();
+    bb::BaldiScript* baldi = gc->baldi ? gc->baldi->GetComponent<bb::BaldiScript>() : 0;
+    if (baldi && !baldi->isActiveAndEnabled() && gc->baldi) gc->baldi->SetActive(true);
+    for (int f = 0; f < 20; f++) eng::runFullFrame(1.0f / 50.0f);
+    float drift = 0.0f;
+    if (gc->baldi && gc->baldi->transform) drift = bb::dist(gc->baldi->transform->position, home);
+    check("debug-menu-npc-ignore-freezes-baldi", ignoreOn && drift < 0.0001f,
+          "ignoreFlag=" + i2s((int)ignoreOn) + " baldi drift " + f2s(drift) + " over 20 frames");
+  }
+
+  // ---- row 1 clicked: every NPC but Baldi is out of the world; a second click restores them.
+  // Normal play reaches this row POST-spoop (the C# has every NPC root inactive until the first
+  // notebook flips on spoop mode), so the test starts there too: ActivateSpoopMode is the exact
+  // switch a real run would have flipped. Toggling it ON also cancels the ignore cheat (row 0
+  // left it on above): "except Baldi" must not leave him frozen (the user report), so the
+  // second half drives REAL frames with the menu closed and requires him to chase.
+  {
+    gc->ActivateSpoopMode();
+    CLICK_ROW(1);
+    const bool ignoreCleared = !bb::cheatNpcIgnore();
+    int hidden = 0;
+    bb::GameObject* list[6] = {gc->principal, gc->crafters, gc->playtime, gc->gottaSweep, gc->bully, gc->firstPrize};
+    for (int i = 0; i < 6; i++)
+      if (list[i] != 0 && !list[i]->activeSelf) hidden++;
+    const bool baldiKept = gc->baldi == 0 || gc->baldi->activeSelf;
+    const bool stillOn = gc->dbgNpcOff;
+    // close the menu (frozen timeScale stops the fixed steps), then let Baldi loose
+    eng::injectKey(47, true);
+    eng::runFullFrame(1.0f / 50.0f);
+    eng::injectKeyRelease(47);
+    eng::runFullFrame(1.0f / 50.0f);
+    bb::Vec3 home = gc->baldi ? gc->baldi->transform->position : bb::Vec3();
+    // Baldi walks in slap bursts (timeToMove counts ~2.4s between them), so the drive window
+    // must span several bursts: 240 frames = 4.8s of fixed steps.
+    for (int f = 0; f < 240; f++) eng::runFullFrame(1.0f / 50.0f);
+    float drift = 0.0f;
+    if (gc->baldi && gc->baldi->transform) drift = bb::dist(gc->baldi->transform->position, home);
+    check("debug-menu-disable-npcs-drivest-baldi", ignoreCleared && drift > 0.001f,
+          "ignore auto-cleared=" + i2s((int)ignoreCleared) + ", baldi drift " + f2s(drift) +
+          " over 240 frames with the other 6 disabled (still frozen = broken)");
+    // reopen and restore the NPCs
+    eng::injectKey(47, true);
+    eng::runFullFrame(1.0f / 50.0f);
+    eng::injectKeyRelease(47);
+    eng::runFullFrame(1.0f / 50.0f);
+    CLICK_ROW(1);
+    int restored = 0;
+    for (int i = 0; i < 6; i++)
+      if (list[i] != 0 && list[i]->activeSelf) restored++;
+    check("debug-menu-disable-npcs", hidden == 6 && baldiKept && stillOn && restored == 6,
+          "on: " + i2s(hidden) + "/6 NPCs hidden, baldi kept=" + i2s((int)baldiKept) +
+          "; off: " + i2s(restored) + "/6 back");
+  }
+
+  // ---- row 2 clicked: the math auto-correct cheat flips the game-side flag on, then off
+  {
+    CLICK_ROW(2);
+    const bool onAfterFirst = gc->dbgAutoAnswer;
+    CLICK_ROW(2);
+    const bool offAfterSecond = !gc->dbgAutoAnswer;
+    check("debug-menu-auto-answer-toggle", onAfterFirst && offAfterSecond,
+          "after 1st click flag=" + i2s((int)onAfterFirst) + " (want 1), after 2nd " +
+          i2s((int)gc->dbgAutoAnswer) + " (want 0)");
+  }
+
+  // ---- row 3 clicked: infinite stamina. The pin must hold through a REAL Update tick (the
+  // authentic StaminaCheck path, called every Update from PlayerScript), and disappear when the
+  // cheat goes off (the regen path only trickles -- no per-frame gc reset exists to fake it).
+  {
+    gc->player->stamina = 3.0f;            // as if the sprint had drained it
+    CLICK_ROW(3);
+    const bool flagOn = gc->dbgStaminaInfinite;
+    eng::runFullFrame(1.0f / 50.0f);       // PlayerScript::Update -> StaminaCheck
+    const float pinned = gc->player->stamina;
+    CLICK_ROW(3);
+    const bool flagOff = !gc->dbgStaminaInfinite;
+    gc->player->stamina = 3.0f;
+    eng::runFullFrame(1.0f / 50.0f);       // cheat off: at rest the regen trickle only
+    const float unpinned = gc->player->stamina;
+    check("debug-menu-infinite-stamina", flagOn && pinned >= 99.9f && flagOff && unpinned < 50.0f,
+          "on: flag=" + i2s((int)flagOn) + " stamina " + f2s(pinned) +
+          "; off: flag=" + i2s((int)!flagOff) + " stamina " + f2s(unpinned));
+  }
+
+  // ---- row 4 clicked: ESP through walls -- the engine state carries the npc name list, and
+  // toggling off empties it (the billboard pass reads both; GL-side, so no draw-list evidence).
+  {
+    CLICK_ROW(4);
+    const bool espOn = gc->dbgEsp && g.debugEspOn && !g.debugEspNames.empty();
+    const size_t namesOn = g.debugEspNames.size();
+    CLICK_ROW(4);
+    const bool espOff = !gc->dbgEsp && !g.debugEspOn && g.debugEspNames.empty();
+    check("debug-menu-esp-state", espOn && espOff && namesOn == 26,
+          "on: flag=" + i2s((int)gc->dbgEsp) + " names=" + i2s((int)namesOn) +
+          " (want 26); off: names=" + i2s((int)g.debugEspNames.size()) + " (want 0)");
+  }
+
+  // ---- '/' closes: the run resumes (timeScale back, re-locked mouse, no panel)
+  eng::injectKey(47, true);
+  eng::runFullFrame(1.0f / 50.0f);
+  eng::injectKeyRelease(47);
+  eng::runFullFrame(1.0f / 50.0f);
+  eng::buildDrawList();
+  bool panelGone = true;
+  for (size_t i = 0; i < g.drawList.size(); i++)
+    if (isPanelBg(g.drawList[i])) panelGone = false;
+  const bool closed = !gc->dbgMenuOpen && bb::Time::timeScale == 1.0f && panelGone;
+  check("debug-menu-close-resumes", closed,
+        "open=" + i2s((int)gc->dbgMenuOpen) + " timeScale=" + f2s(bb::Time::timeScale) +
+        " solidPanelStillPresent=" + i2s((int)!panelGone));
+
+  // ---- cleanup: put the scene's gc back for anyone who follows
+  gc->mode = prevMode; gc->spoopMode = prevSpoop;
+  if (!prevBaldiVisible && gc->baldi) gc->baldi->SetActive(false);
+  bb::setCheatNpcIgnore(false);
+  bb::debugUiEsp(false, 0, 0);
+  eng::setDebugFlags(prevDbgFlags);
+
+  // ---- simulated 31718: the TestRoom easter egg must be playable. The demo scene ships with NO
+  // GameControllerScript (Unity-authentic: nothing locks the cursor, the ThinkPad left it
+  // visible, so the OS pointer stays on screen while the camera pans -- that is the real 1.4.3
+  // behaviour, not the "interface messed up" bug). The bug WAS the movement: PlayerMovement
+  // reads the LEGACY InputManager.asset axes ("Forward"/"Strafe"/"Run"), which nothing filled,
+  // so WASD did nothing while Mouse X panned the camera. Check all four demo scripts load and
+  // W actually walks the player, with the follow camera riding along.
+  {
+    eng::unloadScene(true);
+    eng::loadScene("TestRoom");
+    bb::PlayerMovement* pm = 0;
+    bb::CameraScript_Simple* cs = 0;
+    bb::AgentTest* at = 0;
+    bb::ClickableTest* ct = 0;
+    const std::vector<bb::GameObject*>& all = eng::liveGameObjects();
+    for (size_t i = 0; i < all.size(); i++) {
+      if (!pm) pm = all[i]->GetComponent<bb::PlayerMovement>();
+      if (!cs) cs = all[i]->GetComponent<bb::CameraScript_Simple>();
+      if (!at) at = all[i]->GetComponent<bb::AgentTest>();
+      if (!ct) ct = all[i]->GetComponent<bb::ClickableTest>();
+    }
+    const bb::Vec3 pm0 = pm && pm->transform ? pm->transform->position : bb::Vec3();
+    const bb::Vec3 cam0 = cs && cs->transform ? cs->transform->position : bb::Vec3();
+    eng::injectKey((int)bb::KeyCode::W, true);
+    for (int i = 0; i < 20; i++) eng::runFullFrame(1.0f / 50.0f);
+    eng::injectKeyRelease((int)bb::KeyCode::W);
+    eng::runFullFrame(1.0f / 50.0f);
+    const float pmWalk = pm && pm->transform ? (pm->transform->position - pm0).magnitude() : 0.0f;
+    const float camWalk = cs && cs->transform ? (cs->transform->position - cam0).magnitude() : 0.0f;
+    check("testroom-playable",
+          pm && cs && at && ct && pmWalk > 0.2f && camWalk > 0.2f,
+          "comps pm=" + i2s((int)(pm != 0)) + " cam=" + i2s((int)(cs != 0)) +
+          " agent=" + i2s((int)(at != 0)) + " clicker=" + i2s((int)(ct != 0)) +
+          "; W walked the player " + f2s(pmWalk) + "u and the camera followed " + f2s(camWalk) +
+          "u (movement or bindings broken if 0)");
+  }
+}
+
+} // namespace
+
 int main() {
   // Unbuffered: piped stdout is block-buffered, so a crash mid-run would discard every line
   // printed so far -- exactly the output needed to localise the crash.
@@ -4193,6 +4455,7 @@ int main() {
   testTurnSliderDrag();
   testBroadphaseMatchesBrute();
   testDdolStillAlive();
+  testDebugMenuCheats();   // mutates gc state; scheduled last, restores what it can
 
   eng::engineShutdown();
   pass("engine-shutdown");

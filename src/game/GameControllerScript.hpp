@@ -75,7 +75,9 @@ struct TeleporterAnim : Coroutine {
   bool tick(float dt);
 };
 
-struct GameControllerScript : public Component {
+// and BrokenBaldisBasics/SwipeBaldi freebies; the sink side (bb::DebugUiSink) is the -debug cheat
+// menu's four rows, implemented just below the cheat helpers.
+struct GameControllerScript : public Component, public DebugUiSink {
   // ============ methods (C# listing order) ============
 
   virtual void Start() {
@@ -94,6 +96,37 @@ struct GameControllerScript : public Component {
   }
 
   virtual void Update(float dt) {
+    // ---- -debug cheat menu: '/' toggles, bottom-left panel (bb::debugUiFrame draws it) ----------
+    // Runs only with -debug and only in a story/endless run. Following the pause protocol, opening
+    // freezes the run (Time.timeScale 0 stops the fixed steps and both look/move) and reuses the
+    // PauseMenuScript cursor seam (UnlockMouse) so the pointer can actually click the rows.
+    if (debugUiAvailable() && (mode == "story" || mode == "endless"))
+    {
+      if (Input::GetKeyDown((bb::KeyCode)47)) // Unity KeyCode.Slash
+      {
+        if (!dbgMenuOpen && !learningActive && !gamePaused && !player->gameOver)
+        {
+          dbgMenuOpen = true;
+          dbgPrevTimeScale = Time::timeScale;
+          Time::timeScale = 0.0f;
+          UnlockMouse();
+        }
+        else if (dbgMenuOpen)
+        {
+          dbgMenuOpen = false;
+          Time::timeScale = dbgPrevTimeScale;
+          if (!gamePaused && !player->gameOver) LockMouse();
+        }
+      }
+      else if (dbgMenuOpen && (gamePaused || player->gameOver || learningActive))
+      {
+        dbgMenuOpen = false;
+        Time::timeScale = dbgPrevTimeScale;
+        if (!gamePaused && !player->gameOver) LockMouse();
+      }
+      debugUiFrame(this, dbgMenuOpen);
+    }
+
     if (!learningActive)
     {
       // iOS: Rewired GetButtonDown("Pause"), with no gameOver test (ios-ref/classes/
@@ -121,8 +154,10 @@ struct GameControllerScript : public Component {
         UnpauseGame();
       }
 
-      if (!gamePaused && Time::timeScale != 1.0f)
+      if (!gamePaused && !dbgMenuOpen && Time::timeScale != 1.0f)
       {
+        // (-dbg cheat panel: while the '/'-menu is open ITS freeze (dbgPrevTimeScale) owns
+        // timeScale; this floor would snap it back mid-frame and un-freeze the run.)
         Time::timeScale = 1.0f;
       }
 
@@ -249,6 +284,88 @@ struct GameControllerScript : public Component {
   {
     notebooks++;
     UpdateNotebookCount();
+  }
+
+  // ---- -debug cheat menu implementation (the bb::DebugUiSink rows, in panel order) -----------
+
+  void dbgSetNpcsDisabled(bool on) // "disable NPCs except Baldi"
+  {
+    dbgNpcOff = on;
+    if (on)
+    {
+      // Every NPC but Baldi leaves the world (Unity SetActive: updates/triggers stop, sprites
+      // vanish). Baldi stays exactly as he was -- but only if the "make NPCs ignore you" cheat
+      // is NOT also on (its flag freezes him too: that was reported as "the except-baldi thing
+      // still pauses him", because an ignore toggled earlier outlives this row). Turning this
+      // row ON therefore cancels ignore, so the row does what its label promises: NPCs gone,
+      // Baldi chases. (Re-enable ignore afterwards if that pair is wanted.) Only roots that
+      // are currently alive go into the restore list (a re-toggle must reappear the same set).
+      if (cheatNpcIgnore()) setCheatNpcIgnore(false);
+      GameObject* list[6] = {principal, crafters, playtime, gottaSweep, bully, firstPrize};
+      dbgDisabledNpcCount = 0;
+      for (int i = 0; i < 6; i++)
+      {
+        if (list[i] != 0 && list[i]->activeSelf)
+        {
+          list[i]->SetActive(false);
+          dbgDisabledNpcs[dbgDisabledNpcCount++] = list[i];
+        }
+      }
+    }
+    else
+    {
+      for (int i = 0; i < dbgDisabledNpcCount; i++)
+      {
+        if (dbgDisabledNpcs[i] != 0) dbgDisabledNpcs[i]->SetActive(true);
+      }
+      dbgDisabledNpcCount = 0;
+    }
+  }
+
+  virtual int debugUiRows() { return 5; }
+
+  virtual const char* debugUiRow(int i, bool* toggle, bool* on)
+  {
+    *toggle = false;
+    *on = false;
+    switch (i)
+    {
+      case 0: *toggle = true; *on = cheatNpcIgnore(); return "make NPCs ignore you";
+      case 1: *toggle = true; *on = dbgNpcOff; return "disable NPCs except Baldi";
+      case 2: *toggle = true; *on = dbgAutoAnswer; return "auto-correct math questions";
+      case 3: *toggle = true; *on = dbgStaminaInfinite; return "infinite stamina";
+      case 4: *toggle = true; *on = dbgEsp; return "ESP through walls";
+      default: return "";
+    }
+  }
+
+  // "ESP through walls": every NPC root plus the notebook sprites. These are the decomp's own
+  // root GameObject names (verified against the School bake: NPCs here; the bully's root really
+  // is "Its a Bully", NOT "Bully"; the 19 notebook sprite roots are the GO named "Notebooks" and
+  // its 18 Unity-suffixed clones "Notebooks (1)".."Notebooks (18)" -- 26 names in all).
+  static const char* const* kEspNpcNames()
+  {
+    static const char* const names[26] = { "Baldi", "Principal of the Thing", "Playtime",
+                                           "Gotta Sweep", "Its a Bully", "Arts and Crafters", "1st Prize",
+                                           "Notebooks", "Notebooks (1)", "Notebooks (2)", "Notebooks (3)",
+                                           "Notebooks (4)", "Notebooks (5)", "Notebooks (6)", "Notebooks (7)",
+                                           "Notebooks (8)", "Notebooks (9)", "Notebooks (10)", "Notebooks (11)",
+                                           "Notebooks (12)", "Notebooks (13)", "Notebooks (14)", "Notebooks (15)",
+                                           "Notebooks (16)", "Notebooks (17)", "Notebooks (18)" };
+    return names;
+  }
+
+  virtual void debugUiActivate(int i)
+  {
+    switch (i)
+    {
+      case 0: setCheatNpcIgnore(!cheatNpcIgnore()); break;
+      case 1: dbgSetNpcsDisabled(!dbgNpcOff); break;
+      case 2: dbgAutoAnswer = !dbgAutoAnswer; break;
+      case 3: dbgStaminaInfinite = !dbgStaminaInfinite; break;
+      case 4: dbgEsp = !dbgEsp; debugUiEsp(dbgEsp, kEspNpcNames(), 26); break;
+      default: break;
+    }
   }
 
   void LockMouse()
@@ -678,6 +795,15 @@ struct GameControllerScript : public Component {
   bool gamePaused = false;                 // private (C#)
   bool learningActive = false;             // private (C#)
   float gameOverDelay = 0.0f;              // private (C#)
+  // ---- -debug cheat menu state (bb::debugUiFrame; never touched without -debug) ----
+  bool dbgMenuOpen = false;                // the /-toggled panel
+  float dbgPrevTimeScale = 1.0f;           // restored on close (open freezes the run like Pause)
+  bool dbgNpcOff = false;                  // "disable NPCs except Baldi"
+  bool dbgAutoAnswer = false;              // "auto-correct math questions" (MathGameScript reads)
+  bool dbgStaminaInfinite = false;         // "infinite stamina" (PlayerScript::StaminaCheck reads)
+  bool dbgEsp = false;                     // "ESP through walls" (bb::debugUiEsp marks the NPCs)
+  GameObject* dbgDisabledNpcs[6] = {0};    // NPCs hidden by dbgNpcOff, restored on toggle-off
+  int dbgDisabledNpcCount = 0;
   std::string GameOverScene;
   AudioSource* audioDevice = 0;            // private (C#)
   AudioClip* aud_Soda = 0;
@@ -755,6 +881,13 @@ inline void GameControllerScript::ActivateFinaleMode()
 
 // ---- out-of-line bodies (PlayerScript side of the GC <-> PlayerScript mutual dependency) ------
 
+// -debug "infinite stamina": the flag PlayerScript::StaminaCheck early-returns on. Lives here
+// because the COMPLETE GameControllerScript definition is above this line.
+inline bool dbgStaminaPinned(const GameControllerScript* gc)
+{
+  return gc != 0 && gc->dbgStaminaInfinite;
+}
+
 inline void PlayerScript::Update(float dt)
 {
   transform->position = Vec3(transform->position.x, height, transform->position.z);
@@ -762,7 +895,12 @@ inline void PlayerScript::Update(float dt)
   PlayerMove();
   StaminaCheck();
   GuiltCheck();
-  if (cc->velocity().magnitude() > 0.0f)
+  // -debug menu seam: this lock used to fire the same frame the menu opened (the run's leftover
+  // CharacterController velocity stays >0 while the freeze settles), re-hiding the cursor right
+  // after UnlockMouse -- the reported "may need to open/close the menu a few times to get the
+  // mouse". While the panel is open the unlock must win; nothing else here re-locks (pause
+  // menu is inactive and UnpauseGame runs only after the panel closed).
+  if (cc->velocity().magnitude() > 0.0f && !gc->dbgMenuOpen)
   {
     gc->LockMouse();
   }
@@ -783,6 +921,9 @@ inline void PlayerScript::Update(float dt)
 
 inline void PlayerScript::OnTriggerEnter(Collider* other)
 {
+  // -debug cheat ("make NPCs ignore you"): a touch on Baldi/Playtime is nothing -- he (she) brushes
+  // past without the catch or the rope round, matching the frozen-update rest of the cheat.
+  if (cheatNpcIgnore()) return;
   if (other->transform->name() == "Baldi" && !gc->debugMode)
   {
     gameOver = true;

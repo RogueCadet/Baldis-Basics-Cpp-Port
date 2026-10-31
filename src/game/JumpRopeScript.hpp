@@ -25,6 +25,9 @@ struct JumpRopeScript : public Component {
   }
 
   virtual void Update(float dt) {
+    // -debug cheat ("make NPCs ignore you"): an open rope round stops swinging (Playtime never
+    // starts new ones; her FixedUpdate/Update are gated the same way).
+    if (cheatNpcIgnore()) return;
     if (jumpDelay > 0.0f) //Decrease jumpDelay countdown
     {
       jumpDelay -= Time::deltaTime();

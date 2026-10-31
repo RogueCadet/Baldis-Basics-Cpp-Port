@@ -14,10 +14,11 @@
 # would bloat the binary and slow every build, and keeping them on disk means tools\bake-*.js can
 # re-generate them without a recompile.
 #
-# Usage: powershell -ExecutionPolicy Bypass -File tools\package.ps1 [-OutDir <path>] [-Clean]
+# Usage: powershell -ExecutionPolicy Bypass -File tools\package.ps1 [-OutDir <path>] [-Clean] [-NoIos]
 param(
   [string]$OutDir = '',
-  [switch]$Clean
+  [switch]$Clean,
+  [switch]$NoIos
 )
 $ErrorActionPreference = 'Stop'
 $port = Split-Path -Parent $PSScriptRoot
@@ -81,3 +82,12 @@ try {
 }
 
 Write-Host "PACKAGE OK - run $OutDir\baldi.exe from anywhere"
+
+# iOS is a DEPLOY TARGET of the same run, not a separate chore: the portable shell sources and the
+# content\data the package just staged are exactly what the Xcode project consumes, so skipping it
+# silently deploys a stale iOS build. tools\package-ios.ps1 rebuilds dist\BaldiCpp-iOS (+ .zip)
+# against the fresh exe sources and content; -NoIos opts out for a Windows-only repack.
+if (-not $NoIos) {
+  & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'package-ios.ps1')
+  if ($LASTEXITCODE -ne 0) { Write-Host "PACKAGE PARTIAL - Windows OK, iOS FAILED (run tools\package-ios.ps1 for the error)"; exit $LASTEXITCODE }
+}

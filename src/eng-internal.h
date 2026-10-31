@@ -238,6 +238,20 @@ struct State {
   bb::Color ambientLight;           // RenderSettings.ambientLight store
   bb::Material* skybox = 0;
 
+  // ---- -debug cheat menu (GameControllerScript drives it; see bb::debugUiFrame) ----------
+  bool debugUiOpen = false;         // panel expanded (the game toggles this with the / key)
+  bool cheatNpcIgnore = false;      // "make NPCs ignore you": npc scripts early-return on it
+  bb::DebugUiSink* debugUiSink = 0; // set each frame by the game; null = nothing to draw
+  float uiPointerX = -1.0f, uiPointerY = -1.0f;   // last uiPointerMove window coords
+  // Row hit rects from the PREVIOUS build (clicks are hit-tested one frame late -- labels are
+  // static per row so the lag never shows).
+  static const int kDebugUiMaxRows = 8;
+  float dbgRowX[kDebugUiMaxRows], dbgRowY[kDebugUiMaxRows], dbgRowW[kDebugUiMaxRows], dbgRowH[kDebugUiMaxRows];
+  int dbgRowCount = 0;
+  int dbgHoverRow = -1;             // pointer row for the highlight + hover cursor
+  bool debugEspOn = false;          // "ESP through walls": marked sprites redrawn depth-test-off
+  std::vector<std::string> debugEspNames; // the GO names (root or any ancestor) the esp pass marks
+
   // registries
   std::vector<bb::GameObject*> gos;
   std::vector<bb::BoxCollider*> boxColliders;
@@ -581,6 +595,7 @@ void setAssetRoot(const std::string& root); // decompile Assets/ root used to re
 enum DebugFlags {
   kDebugNoClip = 1,
   kDebugDiag = 2,
+  kDebugUi = 4,      // the -debug cheat menu (bottom-left hint + /-toggled panel)
 };
 void setDebugFlags(int flags);
 int debugFlags();

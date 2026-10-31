@@ -28,6 +28,8 @@ struct CraftersScript : public Component {
   }
 
   virtual void Update(float dt) {
+    // -debug cheat ("make NPCs ignore you"): no anger ticks, no force-shows, no teleporting.
+    if (cheatNpcIgnore()) return;
     if (forceShowTime > 0.0f)
     {
       forceShowTime -= Time::deltaTime();
@@ -69,6 +71,8 @@ struct CraftersScript : public Component {
   }
 
   virtual void FixedUpdate() {
+    // -debug cheat ("make NPCs ignore you"): no stare-down, no anger, no teleport hunt.
+    if (cheatNpcIgnore()) return;
     if (gc->notebooks >= 7) // If the player has more then 7 notebooks
     {
       Vec3 direction = player->position - transform->position;
@@ -102,6 +106,8 @@ struct CraftersScript : public Component {
   }
 
   virtual void OnTriggerEnter(Collider* other) { // private (C#)
+    // -debug cheat: the anger teleport never fires on touch with NPCs ignoring you.
+    if (cheatNpcIgnore()) return;
     if (other->tag() == "Player" && angry) // If arts is angry and is touching the player
     {
       cc->enabled = false;

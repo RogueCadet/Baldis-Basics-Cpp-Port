@@ -32,6 +32,8 @@ struct PrincipalScript : public Component {
   }
 
   virtual void Update(float dt) {
+    // -debug cheat ("make NPCs ignore you"): no scolding, no detentions, no chasing.
+    if (cheatNpcIgnore()) return;
     if (seesRuleBreak)
     {
       timeSeenRuleBreak += 1.0f * Time::deltaTime();
@@ -55,6 +57,8 @@ struct PrincipalScript : public Component {
   }
 
   virtual void FixedUpdate() {
+    // -debug cheat: the guilt raycast and the wander agent both stop with the world frozen.
+    if (cheatNpcIgnore()) return;
     if (!angry) // If the principal isn't angry
     {
       aim = player->position - transform->position; // If he sees the player and the player has guilt

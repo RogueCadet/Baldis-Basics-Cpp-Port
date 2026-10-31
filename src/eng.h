@@ -266,6 +266,11 @@ struct MeshRenderer : public Object {
 // Unity Renderer base (Unity chain: Object -> Component -> Behaviour -> Renderer). Our
 // MeshRenderer predates this hook and stays Object-derived for now -- Phase 2/3 unifies the
 // hierarchy if any script needs more than the pointer (BullyScript field use).
+// SpriteRenderer DOES sit under it exactly like Unity: CraftersScript's serialized
+// `craftersRenderer` (Renderer*) points at Arts' own SpriteRenderer in School.unity (both fields
+// carry the same fileID 20876), and that pointer was left null by the binder -- the crash
+// CraftersScript::FixedUpdate hit the moment notebooks reached 7 (visible in
+// %LOCALAPPDATA%\CrashDumps\baldi.exe.11808.dmp: AV at bb::Renderer::isVisible+0x18, rcx=0).
 struct Renderer : public Component {
   bool isVisible() const;            // engine impl (CraftersScript checks camera visibility)
 };
@@ -284,7 +289,7 @@ struct Sprite : public Object {};    // engine: texture-backed quad (atlas regio
 // Billboard component spins the transform in LateUpdate; the renderer just draws the quad).
 // The quad's world size is NOT stored here -- Unity derives it as pixels / spritePixelsToUnits
 // with spritePivot as the origin, which the bake writes to data/sprites-index.json.
-struct SpriteRenderer : public Component {
+struct SpriteRenderer : public Renderer {
   Sprite* sprite = 0;            // sprite->name IS the texture guid (BindCtx::spriteFor)
   Color color;                   // m_Color, multiplied into the quad (tint + fade)
   int sortingOrder = 0;          // Unity sorting within the layer; ties broken by depth
@@ -592,6 +597,8 @@ struct Input {
   static float GetAxis(const char* axis); // engine impl (stock axis; "Mouse ScrollWheel" now)
   static bool GetMouseButtonDown(int button); // engine impl (edge-triggered; 0 = left; EndlessNotebook)
   static bool GetMouseButton(int button);     // engine impl (held state; Interact/UseItem default binding)
+  static Vec3 mousePosition();  // engine impl (Unity: bottom-left-origin pixels of the client area;
+                                // ClickableTest -> ScreenPointToRay; upper layers feed uiPointerMove)
 };
 
 // ---- Unity Cursor control (CursorControllerScript) ----
@@ -665,6 +672,26 @@ struct Debug {
 void setAmbientLight(const Color& c);    // RenderSettings.ambientLight (finale red-light pass)
 void setSkybox(Material* m);             // RenderSettings.skybox (Baldi catch -> black skybox)
 
+// ---- -debug cheat menu (bottom-left; opened with the / key) --------------------------------
+// The ENGINE renders the panel and routes clicks; the GAME (GameControllerScript, story/endless
+// only) supplies the rows and the actions, one DebugUiSink frame call per Update. Available only
+// while the host turned the debug UI on (the shell's -debug/--debug), which is why no gameplay
+// code path ever sees it. While the panel is open the engine swallows the game's mouse-button
+// reads so a player click inside the menu cannot fire a door/interact behind it.
+struct DebugUiSink {
+  virtual ~DebugUiSink() {}
+  virtual int debugUiRows() = 0;                     // row count this frame (0 = no panel)
+  virtual const char* debugUiRow(int i, bool* toggle, bool* on) = 0; // label + optional ON/OFF chip
+  virtual void debugUiActivate(int i) = 0;           // row clicked
+};
+void debugUiFrame(DebugUiSink* sink, bool open);     // gc's Update, every frame while in game
+bool debugUiAvailable();              // -debug given (hint/panel drawn only then)
+bool cheatNpcIgnore();                // the "make NPCs ignore you" cheat (NPC scripts read)
+void setCheatNpcIgnore(bool on);      // the menu's toggle for it
+void debugUiEsp(bool on, const char* const* gameObjectNames, int count);
+                                      // "ESP through walls": sprites of GameObjects whose root or
+                                      // any ancestor is named in the list draw through walls
+
 // C# IEnumerator -> per-frame state machine (one tick == one `yield return null`)
 struct Coroutine {
   virtual ~Coroutine() {}
@@ -683,6 +710,8 @@ struct GameObject : public Object {
   std::string tag = "Untagged";
   static GameObject* Find(const char* name); // engine impl (`GameObject.Find("...")`; scene-graph
                                              // name lookup -- EndlessNotebook wires gc/player)
+  static GameObject* FindGameObjectWithTag(const char* tag); // engine impl (Unity FindGameObjectWithTag;
+                                             // active objects only, first match -- ClickableTest)
   Transform* transform = 0;
   std::vector<Component*> components;  // attached components (scene loader / AddComponent)
   bool dontDestroy = false;            // DontDestroyOnLoad mark (survives scene swaps)

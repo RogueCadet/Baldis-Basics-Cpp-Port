@@ -181,6 +181,7 @@ struct SpriteDraw {
   bb::SpriteRenderer* sr;
   int order;
   float dist2;                       // squared distance, camera to sprite origin
+  bool esp;                          // -debug ESP: redraw through walls (see drawBillboards)
 };
 
 bool spriteDrawLess(const SpriteDraw& a, const SpriteDraw& b) {
@@ -193,6 +194,19 @@ void drawBillboards(TexCache& tex, const Mat4& view) {
   if (g.spriteRenderers.empty()) return;
   bb::Camera* cam = bb::Camera::main();
   const bb::Vec3 eye = (cam && cam->transform) ? cam->transform->position : bb::Vec3(0, 0, 0);
+
+  // -debug ESP hit test: a sprite is "a character" when its GameObject (root or ANY ancestor --
+  // some NPC art hangs on a child) carries one of the names the game registered via
+  // bb::debugUiEsp. Depth-test-off redraws happen later; the flag is just sorted with the quad.
+  auto espHit = [&g](const bb::GameObject* go) {
+    if (g.debugEspNames.empty()) return false;
+    for (const bb::GameObject* o = go; o;) {
+      for (size_t n = 0; n < g.debugEspNames.size(); n++)
+        if (o->name == g.debugEspNames[n]) return true;
+      o = (o->transform && o->transform->parent) ? o->transform->parent->go : 0;
+    }
+    return false;
+  };
 
   std::vector<SpriteDraw> order;
   order.reserve(g.spriteRenderers.size());
@@ -207,6 +221,7 @@ void drawBillboards(TexCache& tex, const Mat4& view) {
     sd.sr = sr;
     sd.order = sr->sortingOrder;
     sd.dist2 = d.x * d.x + d.y * d.y + d.z * d.z;
+    sd.esp = g.debugEspOn && espHit(sr->gameObject);
     order.push_back(sd);
   }
   if (order.empty()) return;
@@ -219,13 +234,14 @@ void drawBillboards(TexCache& tex, const Mat4& view) {
   rgl::DepthMask(false);
   rgl::Disable(rgl::CULL_FACE);          // a billboard may be seen from its back face mid-turn
 
-  for (size_t i = 0; i < order.size(); i++) {
-    bb::SpriteRenderer* sr = order[i].sr;     // visibility was filtered during the sort build
+  // One billboard quad: texture lookup, ambient fold, pivot rect, flip, draw. Shared by the
+  // normal depth-tested pass and (with depth testing off) the -debug ESP pass below.
+  auto drawOne = [&](bb::SpriteRenderer* sr) {
     // Sprite::name IS the texture guid (BindCtx::spriteFor interns them by guid).
     std::map<std::string, SpriteGeom>::iterator it = tex.sprites.find(sr->sprite->name);
-    if (it == tex.sprites.end()) continue;    // not baked -> skip, never draw a placeholder
+    if (it == tex.sprites.end()) return;      // not baked -> skip, never draw a placeholder
     const GLuint bind = tex.forGuid(sr->sprite->name);
-    if (!bind) continue;
+    if (!bind) return;
     const SpriteGeom& sg = it->second;
     if (g_dumpWorld) {
       // --dump-world covers BILLBOARDS too. It used to print only mesh quads, which is why
@@ -245,7 +261,11 @@ void drawBillboards(TexCache& tex, const Mat4& view) {
 
     rgl::Enable(rgl::TEXTURE_2D);
     rgl::BindTexture(rgl::TEXTURE_2D, bind);
-    rgl::Color4f(sr->color.r, sr->color.g, sr->color.b, sr->color.a);
+    // RenderSettings.ambientLight folding, same as the material pass below: white default is a
+    // no-op, the finale's red ambient turns the world-space sprites with the level (alpha must
+    // stay sr->color.a; tinting it would fade the sprite, not redden it).
+    const bb::Color& amb = eng::state().ambientLight;
+    rgl::Color4f(sr->color.r * amb.r, sr->color.g * amb.g, sr->color.b * amb.b, sr->color.a);
 
     // Local-space rect around the pivot, in the sprite's XY plane (Unity sprite forward is +Z).
     const float x0 = -sg.pivotX * sg.unitsW, x1 = (1.0f - sg.pivotX) * sg.unitsW;
@@ -260,6 +280,24 @@ void drawBillboards(TexCache& tex, const Mat4& view) {
     rgl::TexCoord2f(1.0f, 0.0f); rgl::Vertex3f(x1, y1, 0.0f);
     rgl::TexCoord2f(0.0f, 0.0f); rgl::Vertex3f(x0, y1, 0.0f);
     rgl::End();
+  };
+
+  for (size_t i = 0; i < order.size(); i++)
+    drawOne(order[i].sr);              // visibility was filtered during the sort build
+
+  // -debug ESP ("ESP through walls"): the marked sprites are drawn AGAIN with depth TESTING off,
+  // so they read through every wall -- a plain wallhack of the same billboard quad (depth WRITES
+  // were already off). The game's uGUI paints after this, so the debug menu stays on top.
+  if (g.debugEspOn) {
+    bool any = false;
+    for (size_t i = 0; i < order.size(); i++) if (order[i].esp) { any = true; break; }
+    if (any) {
+      rgl::Disable(rgl::DEPTH_TEST);
+      for (size_t i = 0; i < order.size(); i++)
+        if (order[i].esp) drawOne(order[i].sr);
+      rgl::Enable(rgl::DEPTH_TEST);
+      rgl::DepthFunc(rgl::LEQUAL);     // restore what the world pass left installed
+    }
   }
 
   rgl::DepthMask(true);
@@ -607,9 +645,15 @@ void drawWorld(TexCache& tex, int w, int h) {
     // The material TINT multiplies the texel (rgl::MODULATE is the default TexEnv). These materials
     // are not white: 53 of 74 are 0.96 grey and 7 are 0.48, so drawing white made every surface
     // 4.2% too bright -- measured against a real screenshot, uniformly, which is 1/0.96 exactly.
-    const float mcr = mr->material ? mr->material->colorR : 1.0f;
-    const float mcg = mr->material ? mr->material->colorG : 1.0f;
-    const float mcb = mr->material ? mr->material->colorB : 1.0f;
+    // RenderSettings.ambientLight -- Unity multiplies every ambient-lit (vertex-lit) shader output
+    // by it. The scenes read flat because there are no lights and the ambient defaults to white,
+    // so multiplying by white is the exact no-op this pass has always effectively been;
+    // GameControllerScript.ExitReached() raises it to Color.red the moment the first exit is
+    // sealed, and this is what turns the whole school red in the real game. Alpha untouched.
+    const bb::Color& amb = eng::state().ambientLight;
+    const float mcr = (mr->material ? mr->material->colorR : 1.0f) * amb.r;
+    const float mcg = (mr->material ? mr->material->colorG : 1.0f) * amb.g;
+    const float mcb = (mr->material ? mr->material->colorB : 1.0f) * amb.b;
     if (bind) { rgl::Enable(rgl::TEXTURE_2D); rgl::BindTexture(rgl::TEXTURE_2D, bind); rgl::Color4f(mcr, mcg, mcb, 1.0f); }
     else if (mr->material && mr->material->mainTexGuid.empty()) {
       // AUTHORED untextured (no _MainTex): Unity draws the material's _Color. This pass is unlit

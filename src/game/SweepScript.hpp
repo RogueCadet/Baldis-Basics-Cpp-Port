@@ -24,6 +24,8 @@ struct SweepScript : public Component {
   }
 
   virtual void Update(float dt) {
+    // -debug cheat ("make NPCs ignore you"): Sweep never wakes up and never sweeps you along.
+    if (cheatNpcIgnore()) return;
     if (coolDown > 0.0f)
     {
       coolDown -= 1.0f * Time::deltaTime();
@@ -42,6 +44,8 @@ struct SweepScript : public Component {
   }
 
   virtual void FixedUpdate() {
+    // -debug cheat: the sweep-roam agent stops with the cheat on.
+    if (cheatNpcIgnore()) return;
     if ((double)agent->velocity().magnitude() <= 0.1 && coolDown <= 0.0f && wanders < 5 && active) // If Gotta Sweep has roamed around the school 5 times
     {
       Wander(); // Wander
@@ -69,6 +73,8 @@ struct SweepScript : public Component {
   }
 
   virtual void OnTriggerEnter(Collider* other) {
+    // -debug cheat: the broom shove stops while NPCs ignore you.
+    if (cheatNpcIgnore()) return;
     if (other->tag() == "NPC" || other->tag() == "Player")
     {
       audioDevice->PlayOneShot(aud_Sweep);

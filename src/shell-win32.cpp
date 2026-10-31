@@ -170,6 +170,7 @@ int keyCodeFor(WPARAM vk, LPARAM lp) {
     case VK_BACK: return 8;         // Backspace (pad answer erase)
     case VK_RETURN: return 13;      // Return/Enter (pad answer submit)
     case VK_OEM_MINUS: return 45;   // Minus (pad negative numbers / impossible mode)
+    case VK_OEM_2: return 47;       // the / key (Unity KeyCode.Slash: -debug cheat menu toggle)
     default: {
       if (vk >= '0' && vk <= '9') return 256 + (int)(vk - '0');   // Alpha0..9 (pad digits)
       return -1;
@@ -628,7 +629,7 @@ int main(int argc, char** argv) {
   // through one engine switch so the
   // game code in CharacterController::Move only ever reads eng::debugFlags().
   if (argFlag(argc, argv, "--debug") || argFlag(argc, argv, "-debug")) {
-    eng::setDebugFlags(eng::kDebugNoClip | eng::kDebugDiag);
+    eng::setDebugFlags(eng::kDebugNoClip | eng::kDebugDiag | eng::kDebugUi);
     printf("shell: --debug: collision blocking DISABLED, collision diagnostics ON, frame profiler ON\n");
   }
 
@@ -1029,6 +1030,8 @@ int main(int argc, char** argv) {
     if (catchAt >= 0 && cf == catchAt && !eng::debugBaldiCatch()) printf("shell: --catch failed (no player/Baldi)\n");
     static const bool spoopArg = argFlag(argc, argv, "--spoop");
     if (spoopArg && cf == 5) eng::debugSpoopMode();   // every NPC awake: the real gameplay load
+    static const bool redArg = argFlag(argc, argv, "--red");
+    if (redArg && cf == 5) bb::setAmbientLight(bb::Color::red());   // TEMP BB_REDTEST probe: verify the finale red ambient (REMOVE with the flag once verified)
     if (catchAt >= 0 && cf >= catchAt - 5 && cf <= catchAt + 90) {   // frame pacing through the jumpscare
       static double lastLog = 0.0;
       const double now = qpcSeconds();
@@ -1105,6 +1108,22 @@ int main(int argc, char** argv) {
     }
     profGame += frameDt;
     eng::runFullFrame(frameDt);
+    // TEMP BB_DBGMENU (remove with the debug-feature probes): scripted '/' press at frames 4-5 so
+    // --shot runs capture the bottom-left cheat panel for the handoff's visual proof.
+    if (getenv("BB_DBGMENU") && n == 4) eng::injectKey(47, true);
+    if (getenv("BB_DBGMENU") && n == 5) eng::injectKeyRelease(47);
+    // TEMP BB_DBGESP (remove with the debug-feature probes): wallhack visual proof -- mark the
+    // notebook billboards with the -debug ESP pass straight from the shell. The notebooks live in
+    // classroom interiors, so most of them are behind walls from the spawn camera; the in-game
+    // cheat marks the seven NPC roots instead (bb::debugUiEsp takes names root-or-ancestor).
+    if (getenv("BB_DBGESP") && n == 3) {
+      static const char* const kProbeEspNames[19] = {
+        "Notebooks", "Notebooks (1)", "Notebooks (2)", "Notebooks (3)", "Notebooks (4)",
+        "Notebooks (5)", "Notebooks (6)", "Notebooks (7)", "Notebooks (8)", "Notebooks (9)",
+        "Notebooks (10)", "Notebooks (11)", "Notebooks (12)", "Notebooks (13)", "Notebooks (14)",
+        "Notebooks (15)", "Notebooks (16)", "Notebooks (17)", "Notebooks (18)" };
+      bb::debugUiEsp(true, kProbeEspNames, 19);
+    }
     // Application.Quit() (the main menu's X button -> ExitButtonScript.ExitGame) only sets the
     // engine's quitting flag; nothing read it, so the button did nothing.
     if (eng::state().quitting) g_quit = true;

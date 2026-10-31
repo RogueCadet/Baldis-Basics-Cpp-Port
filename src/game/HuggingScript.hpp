@@ -14,6 +14,8 @@ struct HuggingScript : public Component {
   }
 
   virtual void Update(float dt) {
+    // -debug cheat ("make NPCs ignore you"): the hug rescue/heft rig freezes with 1st Prize.
+    if (cheatNpcIgnore()) return;
     if (failSave > 0.0f)
     {
       failSave -= Time::deltaTime();
@@ -25,6 +27,8 @@ struct HuggingScript : public Component {
   }
 
   virtual void FixedUpdate() {
+    // -debug cheat ("make NPCs ignore you"): no hug shoves while the NPCs freeze.
+    if (cheatNpcIgnore()) return;
     if (inBsoda)
     {
       rb->velocity = otherVelocity;

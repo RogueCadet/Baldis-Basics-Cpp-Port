@@ -30,6 +30,8 @@ struct FirstPrizeScript : public Component {
   }
 
   virtual void Update(float dt) {
+    // -debug cheat ("make NPCs ignore you"): no driving at you, no crazyTime charges.
+    if (cheatNpcIgnore()) return;
     if (coolDown > 0.0f)
     {
       coolDown -= 1.0f * Time::deltaTime();
@@ -71,6 +73,8 @@ struct FirstPrizeScript : public Component {
   }
 
   virtual void FixedUpdate() {
+    // -debug cheat: the push agent stops with the NPC-freeze cheat.
+    if (cheatNpcIgnore()) return;
     Vec3 direction = player->position - transform->position;
     RaycastHit raycastHit;
     if (Physics::Raycast(transform->position, direction, &raycastHit, std::numeric_limits<float>::infinity(), 769, QueryTriggerInteraction::Ignore) && raycastHit.transform->tag() == "Player")
@@ -125,6 +129,8 @@ struct FirstPrizeScript : public Component {
   }
 
   virtual void OnTriggerEnter(Collider* other) {
+    // -debug cheat: no hug catch on touch with NPCs ignoring you.
+    if (cheatNpcIgnore()) return;
     if (other->tag() == "Player")
     {
       if (!audioDevice->isPlaying() && !hugAnnounced)
